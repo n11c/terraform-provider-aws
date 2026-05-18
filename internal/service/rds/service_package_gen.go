@@ -88,11 +88,13 @@ func (p *servicePackage) FrameworkResources(ctx context.Context) []*inttypes.Ser
 			Region: inttypes.ResourceRegionDefault(),
 		},
 		{
-			Factory: newResourceTenantDatabase,
-			Name:    "Tenant Database",
-			Tags: &types.ServicePackageResourceTags{
+			Factory:  newResourceTenantDatabase,
+			TypeName: "aws_db_tenant_database",
+			Name:     "Tenant Database",
+			Tags: unique.Make(inttypes.ServicePackageResourceTags{
 				IdentifierAttribute: names.AttrARN,
-			},
+			}),
+			Region: unique.Make(inttypes.ResourceRegionDefault()),
 		},
 	}
 }

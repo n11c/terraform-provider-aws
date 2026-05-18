@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"github.com/YakDriver/regexache"
-	awstypes "github.com/aws/aws-sdk-go-v2/service/appconfig/types"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/rds"
-	"github.com/hashicorp/aws-sdk-go-base/v2/awsv1shim/v2/tfawserr"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
+	awstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -38,6 +37,8 @@ import (
 	"github.com/hashicorp/terraform-provider-aws/names"
 )
 
+// @FrameworkResource("aws_db_tenant_database", name="Tenant Database")
+// @Tags(identifierAttribute="arn")
 func newResourceTenantDatabase(_ context.Context) (resource.ResourceWithConfigure, error) {
 	r := &resourceTenantDatabase{}
 
@@ -154,7 +155,7 @@ func (r *resourceTenantDatabase) Create(ctx context.Context, req resource.Create
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	conn := r.Meta().RDSConn(ctx)
+	conn := r.Meta().RDSClient(ctx)
 
 	var plan resourceTenantDatabaseData
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -180,7 +181,7 @@ func (r *resourceTenantDatabase) Create(ctx context.Context, req resource.Create
 		return
 	}
 
-	in := &rds.CreateTenantDatabaseInput{
+	in := rds.CreateTenantDatabaseInput{
 		DBInstanceIdentifier: aws.String(plan.DBInstanceIdentifier.ValueString()),
 		MasterUsername:       aws.String(plan.MasterUsername.ValueString()),
 		MasterUserPassword:   aws.String(plan.MasterUserPassword.ValueString()),
@@ -195,7 +196,7 @@ func (r *resourceTenantDatabase) Create(ctx context.Context, req resource.Create
 		in.NcharCharacterSetName = aws.String(plan.NcharCharacterSetName.ValueString())
 	}
 
-	_, err := waitDBInstanceAvailableSDKv1(ctx, conn, plan.DBInstanceIdentifier.ValueString(), time.Duration(10*float64(time.Minute)))
+	_, err := waitDBInstanceAvailable(ctx, conn, plan.DBInstanceIdentifier.ValueString(), 10*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.RDS, create.ErrActionWaitingForCreation, "DB Instance", plan.DBInstanceIdentifier.String(), err),
@@ -204,7 +205,7 @@ func (r *resourceTenantDatabase) Create(ctx context.Context, req resource.Create
 		return
 	}
 
-	out, err := conn.CreateTenantDatabase(in)
+	out, err := conn.CreateTenantDatabase(ctx, &in)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.RDS, create.ErrActionCreating, ResNameTenantDatabase, plan.TenantDBName.String(), err),
@@ -243,7 +244,7 @@ func (r *resourceTenantDatabase) Create(ctx context.Context, req resource.Create
 }
 
 func (r *resourceTenantDatabase) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	conn := r.Meta().RDSConn(ctx)
+	conn := r.Meta().RDSClient(ctx)
 
 	var state resourceTenantDatabaseData
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -285,7 +286,7 @@ func (r *resourceTenantDatabase) Update(ctx context.Context, req resource.Update
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	conn := r.Meta().RDSConn(ctx)
+	conn := r.Meta().RDSClient(ctx)
 
 	var plan, state resourceTenantDatabaseData
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -297,7 +298,7 @@ func (r *resourceTenantDatabase) Update(ctx context.Context, req resource.Update
 	if !plan.TenantDBName.Equal(state.TenantDBName) ||
 		!plan.MasterUserPassword.Equal(state.MasterUserPassword) {
 
-		in := &rds.ModifyTenantDatabaseInput{
+		in := rds.ModifyTenantDatabaseInput{
 			DBInstanceIdentifier: aws.String(plan.DBInstanceIdentifier.ValueString()),
 			TenantDBName:         aws.String(state.TenantDBName.ValueString()),
 		}
@@ -310,7 +311,7 @@ func (r *resourceTenantDatabase) Update(ctx context.Context, req resource.Update
 			in.MasterUserPassword = aws.String(plan.MasterUserPassword.ValueString())
 		}
 
-		out, err := conn.ModifyTenantDatabaseWithContext(ctx, in)
+		out, err := conn.ModifyTenantDatabase(ctx, &in)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				create.ProblemStandardMessage(names.RDS, create.ErrActionUpdating, ResNameTenantDatabase, plan.TenantDBName.String(), err),
@@ -330,7 +331,7 @@ func (r *resourceTenantDatabase) Update(ctx context.Context, req resource.Update
 		plan.TenantDBName = flex.StringToFramework(ctx, out.TenantDatabase.TenantDBName)
 	}
 
-	_, err := waitDBInstanceAvailableSDKv1(ctx, conn, plan.DBInstanceIdentifier.ValueString(), time.Duration(10*float64(time.Minute)))
+	_, err := waitDBInstanceAvailable(ctx, conn, plan.DBInstanceIdentifier.ValueString(), 10*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.RDS, create.ErrActionWaitingForCreation, "DB Instance", plan.DBInstanceIdentifier.String(), err),
@@ -356,7 +357,7 @@ func (r *resourceTenantDatabase) Delete(ctx context.Context, req resource.Delete
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
-	conn := r.Meta().RDSConn(ctx)
+	conn := r.Meta().RDSClient(ctx)
 
 	var state resourceTenantDatabaseData
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -364,14 +365,14 @@ func (r *resourceTenantDatabase) Delete(ctx context.Context, req resource.Delete
 		return
 	}
 
-	in := &rds.DeleteTenantDatabaseInput{
+	in := rds.DeleteTenantDatabaseInput{
 		DBInstanceIdentifier:      aws.String(state.DBInstanceIdentifier.ValueString()),
 		TenantDBName:              aws.String(state.TenantDBName.ValueString()),
 		FinalDBSnapshotIdentifier: aws.String(state.FinalDBSnapshotIdentifier.ValueString()),
 		SkipFinalSnapshot:         aws.Bool(state.SkipFinalSnapshot.ValueBool()),
 	}
 
-	_, err := waitDBInstanceAvailableSDKv1(ctx, conn, state.DBInstanceIdentifier.ValueString(), time.Duration(10*float64(time.Minute)))
+	_, err := waitDBInstanceAvailable(ctx, conn, state.DBInstanceIdentifier.ValueString(), 10*time.Minute)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.RDS, create.ErrActionWaitingForCreation, "DB Instance", state.DBInstanceIdentifier.String(), err),
@@ -380,9 +381,9 @@ func (r *resourceTenantDatabase) Delete(ctx context.Context, req resource.Delete
 		return
 	}
 
-	_, err = conn.DeleteTenantDatabaseWithContext(ctx, in)
+	_, err = conn.DeleteTenantDatabase(ctx, &in)
 	if err != nil {
-		if errs.IsA[*awstypes.ResourceNotFoundException](err) {
+		if errs.IsA[*awstypes.TenantDatabaseNotFoundFault](err) {
 			return
 		}
 		resp.Diagnostics.AddError(
@@ -401,10 +402,6 @@ func (r *resourceTenantDatabase) Delete(ctx context.Context, req resource.Delete
 		)
 		return
 	}
-}
-
-func (r *resourceTenantDatabase) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	r.SetTagsAll(ctx, req, resp)
 }
 
 func (r *resourceTenantDatabase) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -429,7 +426,7 @@ const (
 	TenantDBStatusDeleting         = "deleting"
 )
 
-func waitTenantDatabaseCreated(ctx context.Context, conn *rds.RDS, tenantDBResourceId string, timeout time.Duration) (*rds.TenantDatabase, error) {
+func waitTenantDatabaseCreated(ctx context.Context, conn *rds.Client, tenantDBResourceId string, timeout time.Duration) (*awstypes.TenantDatabase, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending:                   []string{},
 		Target:                    []string{TenantDBStatusAvailable},
@@ -442,14 +439,14 @@ func waitTenantDatabaseCreated(ctx context.Context, conn *rds.RDS, tenantDBResou
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
-	if out, ok := outputRaw.(*rds.TenantDatabase); ok {
+	if out, ok := outputRaw.(*awstypes.TenantDatabase); ok {
 		return out, err
 	}
 
 	return nil, err
 }
 
-func waitTenantDatabaseUpdated(ctx context.Context, conn *rds.RDS, tenantDBResourceId string, timeout time.Duration) (*rds.TenantDatabase, error) {
+func waitTenantDatabaseUpdated(ctx context.Context, conn *rds.Client, tenantDBResourceId string, timeout time.Duration) (*awstypes.TenantDatabase, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending:                   []string{TenantDBStatusRenaming, TenantDBStatusCredentialsReset},
 		Target:                    []string{TenantDBStatusAvailable},
@@ -462,14 +459,14 @@ func waitTenantDatabaseUpdated(ctx context.Context, conn *rds.RDS, tenantDBResou
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
-	if out, ok := outputRaw.(*rds.TenantDatabase); ok {
+	if out, ok := outputRaw.(*awstypes.TenantDatabase); ok {
 		return out, err
 	}
 
 	return nil, err
 }
 
-func waitTenantDatabaseDeleted(ctx context.Context, conn *rds.RDS, tenantDBResourceId string, timeout time.Duration) (*rds.TenantDatabase, error) {
+func waitTenantDatabaseDeleted(ctx context.Context, conn *rds.Client, tenantDBResourceId string, timeout time.Duration) (*awstypes.TenantDatabase, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending: []string{TenantDBStatusDeleting},
 		Target:  []string{},
@@ -478,14 +475,14 @@ func waitTenantDatabaseDeleted(ctx context.Context, conn *rds.RDS, tenantDBResou
 	}
 
 	outputRaw, err := stateConf.WaitForStateContext(ctx)
-	if out, ok := outputRaw.(*rds.TenantDatabase); ok {
+	if out, ok := outputRaw.(*awstypes.TenantDatabase); ok {
 		return out, err
 	}
 
 	return nil, err
 }
 
-func statusTenantDatabase(ctx context.Context, conn *rds.RDS, tenantDBResourceId string) retry.StateRefreshFunc {
+func statusTenantDatabase(ctx context.Context, conn *rds.Client, tenantDBResourceId string) retry.StateRefreshFunc {
 	return func() (interface{}, string, error) {
 		out, err := findTenantDatabaseById(ctx, conn, tenantDBResourceId)
 		if tfresource.NotFound(err) {
@@ -496,78 +493,65 @@ func statusTenantDatabase(ctx context.Context, conn *rds.RDS, tenantDBResourceId
 			return nil, "", err
 		}
 
-		return out, aws.StringValue(out.Status), nil
+		return out, aws.ToString(out.Status), nil
 	}
 }
 
-func findTenantDatabaseById(ctx context.Context, conn *rds.RDS, tenantDBResourceId string) (*rds.TenantDatabase, error) {
-	input := &rds.DescribeTenantDatabasesInput{
-		Filters: []*rds.Filter{
+func findTenantDatabaseById(ctx context.Context, conn *rds.Client, tenantDBResourceId string) (*awstypes.TenantDatabase, error) {
+	input := rds.DescribeTenantDatabasesInput{
+		Filters: []awstypes.Filter{
 			{
 				Name:   aws.String("tenant-database-resource-id"),
-				Values: []*string{&tenantDBResourceId},
+				Values: []string{tenantDBResourceId},
 			},
 		},
 	}
 
-	output, err := findTenantDatabases(ctx, conn, input, tfslices.PredicateTrue[*rds.TenantDatabase]())
+	output, err := findTenantDatabases(ctx, conn, &input, tfslices.PredicateTrue[awstypes.TenantDatabase]())
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := tfresource.AssertSinglePtrResult(output)
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
+	return tfresource.AssertSingleValueResult(output)
 }
 
-func findTenantDatabaseByName(ctx context.Context, conn *rds.RDS, dBInstanceIdentifier string, tenantDBName string) (*rds.TenantDatabase, error) {
-	input := &rds.DescribeTenantDatabasesInput{
+func findTenantDatabaseByName(ctx context.Context, conn *rds.Client, dBInstanceIdentifier string, tenantDBName string) (*awstypes.TenantDatabase, error) {
+	input := rds.DescribeTenantDatabasesInput{
 		DBInstanceIdentifier: aws.String(dBInstanceIdentifier),
 		TenantDBName:         aws.String(tenantDBName),
 	}
 
-	output, err := findTenantDatabases(ctx, conn, input, tfslices.PredicateTrue[*rds.TenantDatabase]())
+	output, err := findTenantDatabases(ctx, conn, &input, tfslices.PredicateTrue[awstypes.TenantDatabase]())
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := tfresource.AssertSinglePtrResult(output)
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
+	return tfresource.AssertSingleValueResult(output)
 }
 
-func findTenantDatabases(ctx context.Context, conn *rds.RDS, input *rds.DescribeTenantDatabasesInput, filter tfslices.Predicate[*rds.TenantDatabase]) ([]*rds.TenantDatabase, error) {
-	var output []*rds.TenantDatabase
+func findTenantDatabases(ctx context.Context, conn *rds.Client, input *rds.DescribeTenantDatabasesInput, filter tfslices.Predicate[awstypes.TenantDatabase]) ([]awstypes.TenantDatabase, error) {
+	var output []awstypes.TenantDatabase
 
-	err := conn.DescribeTenantDatabasesPagesWithContext(ctx, input, func(page *rds.DescribeTenantDatabasesOutput, lastPage bool) bool {
-		if page == nil {
-			return !lastPage
-		}
+	pages := rds.NewDescribeTenantDatabasesPaginator(conn, input)
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
 
-		for _, v := range page.TenantDatabases {
-			if v != nil && filter(v) {
-				output = append(output, v)
+		if errs.IsA[*awstypes.DBClusterNotFoundFault](err) {
+			return nil, &retry.NotFoundError{
+				LastError:   err,
+				LastRequest: input,
 			}
 		}
 
-		return !lastPage
-	})
-
-	if tfawserr.ErrCodeEquals(err, rds.ErrCodeDBClusterNotFoundFault) {
-		return nil, &retry.NotFoundError{
-			LastError:   err,
-			LastRequest: input,
+		if err != nil {
+			return nil, err
 		}
-	}
 
-	if err != nil {
-		return nil, err
+		for _, v := range page.TenantDatabases {
+			if filter(v) {
+				output = append(output, v)
+			}
+		}
 	}
 
 	return output, nil

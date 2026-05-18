@@ -1993,7 +1993,7 @@ func resourceInstanceRead(ctx context.Context, d *schema.ResourceData, meta any)
 		input := &rds.DescribeTenantDatabasesInput{
 			DBInstanceIdentifier: v.DBInstanceIdentifier,
 		}
-		output, err := findTenantDatabases(ctx, conn, input, tfslices.PredicateTrue[*rds.TenantDatabase]())
+		output, err := findTenantDatabases(ctx, conn, input, tfslices.PredicateTrue[types.TenantDatabase]())
 		if err != nil {
 			return sdkdiag.AppendErrorf(diags, "retrieving tenant databases: %s", err)
 		}
