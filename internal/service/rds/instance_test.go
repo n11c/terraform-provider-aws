@@ -6238,6 +6238,53 @@ func TestAccRDSInstance_Oracle_noNationalCharacterSet(t *testing.T) {
 	})
 }
 
+func TestAccRDSInstance_Oracle_multiTenant(t *testing.T) {
+	ctx := acctest.Context(t)
+
+	// All RDS Instance tests should skip for testing.Short() except the 20 shortest running tests.
+	if testing.Short() {
+		t.Skip("skipping long-running test in short mode")
+	}
+
+	var dbInstance types.DBInstance
+
+	rName := acctest.RandomWithPrefix(t, acctest.ResourcePrefix)
+	resourceName := "aws_db_instance.test"
+
+	acctest.ParallelTest(ctx, t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(ctx, t) },
+		ErrorCheck:               acctest.ErrorCheck(t, names.RDSServiceID),
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipBelow(tfversion.Version1_11_0),
+		},
+		CheckDestroy: testAccCheckDBInstanceDestroy(ctx, t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccInstanceConfig_Oracle_multiTenant(rName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckDBInstanceExists(ctx, t, resourceName, &dbInstance),
+					resource.TestCheckResourceAttr(resourceName, "multi_tenant", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "engine", tfrds.InstanceEngineOracleStandard2CDB),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					names.AttrApplyImmediately,
+					names.AttrFinalSnapshotIdentifier,
+					"password_wo",
+					"password_wo_version",
+					"skip_final_snapshot",
+					"delete_automated_backups",
+				},
+			},
+		},
+	})
+}
+
 func TestAccRDSInstance_Outposts_coIPEnabled(t *testing.T) {
 	ctx := acctest.Context(t)
 
@@ -10282,6 +10329,40 @@ resource "aws_db_instance" "test" {
   skip_final_snapshot = true
 }
 `, tfrds.InstanceEngineOracleStandard2, mainInstanceClasses, rName))
+}
+
+func testAccInstanceConfig_Oracle_multiTenant(rName string) string {
+	return acctest.ConfigCompose(
+		acctest.ConfigRandomPassword(),
+		fmt.Sprintf(`
+data "aws_rds_engine_version" "test" {
+  engine = %[1]q
+}
+
+data "aws_rds_orderable_db_instance" "test" {
+  engine         = data.aws_rds_engine_version.test.engine
+  engine_version = data.aws_rds_engine_version.test.version
+  license_model  = "license-included"
+  storage_type   = "gp2"
+
+  preferred_instance_classes = [%[2]s]
+}
+
+resource "aws_db_instance" "test" {
+  identifier          = %[3]q
+  engine              = data.aws_rds_orderable_db_instance.test.engine
+  engine_version      = data.aws_rds_orderable_db_instance.test.engine_version
+  instance_class      = data.aws_rds_orderable_db_instance.test.instance_class
+  allocated_storage   = 20
+  storage_type        = "gp2"
+  license_model       = "license-included"
+  multi_tenant        = true
+  username            = "tfacctest"
+  password_wo         = ephemeral.aws_secretsmanager_random_password.test.random_password
+  password_wo_version = 1
+  skip_final_snapshot = true
+}
+`, tfrds.InstanceEngineOracleStandard2CDB, strings.Replace(mainInstanceClasses, "db.t3.small", "frodo", 1), rName))
 }
 
 func testAccInstanceConfig_CloudWatchLogsExport_mssql(rName string) string {
